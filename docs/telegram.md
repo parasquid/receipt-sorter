@@ -14,6 +14,11 @@ In server mode, Telegram can:
 
 One-shot mode does not run the Telegram listener and does not send Telegram notifications.
 
+If Telegram cannot start in server mode, the bot retries three times with 5s
+and 30s backoff delays. After the third failed attempt, Drive polling continues
+in Drive-only degraded mode and Telegram notifications are suppressed until the
+process is restarted.
+
 ## Setup
 
 1. Message `@BotFather`.

@@ -1,7 +1,6 @@
 import asyncio
+from contextlib import suppress
 from typing import Any, cast
-
-import pytest
 
 from receipt_sorter import app
 from receipt_sorter.ai import CorrectionParser, DocumentClassifier, DocumentInput
@@ -116,6 +115,32 @@ def test_process_drive_batch_leaves_retryable_failures_in_inbox(monkeypatch, cap
     assert "Leaving file in Inbox" in output
 
 
+def test_poll_drive_logs_degraded_mode_during_loop(monkeypatch, capsys):
+    config = Config(accounting_folder_id="accounting-id", inbox_folder_id="inbox-id")
+    state = SessionState(telegram_available=False)
+
+    class StopPolling(BaseException):
+        pass
+
+    async def fake_poll_drive_once(config, drive_client, classifier, state):
+        raise StopPolling()
+
+    monkeypatch.setattr(app, "poll_drive_once", fake_poll_drive_once)
+
+    with suppress(StopPolling):
+        asyncio.run(
+            app.poll_drive(
+                config,
+                classifier=cast(DocumentClassifier, "classifier"),
+                state=state,
+                drive_client=cast(DriveClient, "drive-client"),
+            )
+        )
+
+    output = capsys.readouterr().out
+    assert "Drive-only degraded mode is active; Telegram is disabled until restart." in output
+
+
 def test_poll_drive_once_sends_notification_for_processed_batch(monkeypatch):
     config = Config(
         accounting_folder_id="accounting-id",
@@ -159,6 +184,94 @@ def test_poll_drive_once_sends_notification_for_processed_batch(monkeypatch):
     assert sent == [("12345", processed)]
 
 
+def test_poll_drive_once_skips_notification_when_telegram_degraded(monkeypatch, capsys):
+    config = Config(
+        accounting_folder_id="accounting-id",
+        inbox_folder_id="inbox-id",
+        telegram_bot_token="token",
+        telegram_chat_id="12345",
+    )
+    state = SessionState(telegram_available=False)
+    drive_client = FakeDriveClient([])
+    classifier = FakeClassifier()
+    processed = [
+        ProcessedDocument(
+            original_name="receipt.pdf",
+            destination_year="2026",
+            destination_month="05-May",
+            new_name="Vendor_Office_20260512.pdf",
+            result=DocumentResult(
+                supplier="Vendor",
+                category="Office Supplies",
+                date="2026-05-12",
+                amount=42.0,
+                currency="USD",
+                confidence=0.9,
+            ),
+        )
+    ]
+    sent = []
+
+    async def fake_process_drive_batch(config, drive_client, classifier, state):
+        return processed
+
+    async def fake_send_telegram_summary(config, processed_documents):
+        sent.append((config.telegram_chat_id, processed_documents))
+
+    monkeypatch.setattr("receipt_sorter.app.process_drive_batch", fake_process_drive_batch)
+    monkeypatch.setattr("receipt_sorter.app.send_telegram_summary", fake_send_telegram_summary)
+
+    result = asyncio.run(poll_drive_once(config, drive_client, classifier, state))
+
+    assert result == processed
+    assert sent == []
+    output = capsys.readouterr().out
+    assert "Skipping Telegram summary because server is in Drive-only degraded mode." in output
+
+
+def test_poll_drive_once_logs_notification_failure_without_failing_batch(monkeypatch, capsys):
+    config = Config(
+        accounting_folder_id="accounting-id",
+        inbox_folder_id="inbox-id",
+        telegram_bot_token="token",
+        telegram_chat_id="12345",
+    )
+    state = SessionState()
+    drive_client = FakeDriveClient([])
+    classifier = FakeClassifier()
+    processed = [
+        ProcessedDocument(
+            original_name="receipt.pdf",
+            destination_year="2026",
+            destination_month="05-May",
+            new_name="Vendor_Office_20260512.pdf",
+            result=DocumentResult(
+                supplier="Vendor",
+                category="Office Supplies",
+                date="2026-05-12",
+                amount=42.0,
+                currency="USD",
+                confidence=0.9,
+            ),
+        )
+    ]
+
+    async def fake_process_drive_batch(config, drive_client, classifier, state):
+        return processed
+
+    async def fake_send_telegram_summary(config, processed_documents):
+        raise RuntimeError("httpx.ConnectError")
+
+    monkeypatch.setattr("receipt_sorter.app.process_drive_batch", fake_process_drive_batch)
+    monkeypatch.setattr("receipt_sorter.app.send_telegram_summary", fake_send_telegram_summary)
+
+    result = asyncio.run(poll_drive_once(config, drive_client, classifier, state))
+
+    assert result == processed
+    output = capsys.readouterr().out
+    assert "Telegram summary failed; Drive processing already completed." in output
+
+
 def test_main_defaults_to_one_shot_mode(monkeypatch):
     config = Config(accounting_folder_id="accounting-id", inbox_folder_id="inbox-id")
     calls = []
@@ -195,6 +308,26 @@ def test_main_serve_flag_runs_long_lived_mode(monkeypatch):
     app.main(["--serve"])
 
     assert calls == [("serve", config)]
+
+
+def test_main_handles_keyboard_interrupt_cleanly(monkeypatch, capsys):
+    config = Config(accounting_folder_id="accounting-id", inbox_folder_id="inbox-id")
+
+    def fake_asyncio_run(coro):
+        coro.close()
+        raise KeyboardInterrupt()
+
+    async def fake_run_server(seen_config):
+        raise AssertionError("asyncio.run is monkeypatched")
+
+    monkeypatch.setattr(app, "parse_config", lambda: config)
+    monkeypatch.setattr(app, "run_server", fake_run_server, raising=False)
+    monkeypatch.setattr(app.asyncio, "run", fake_asyncio_run)
+
+    app.main(["--serve"])
+
+    output = capsys.readouterr().out
+    assert "Shutdown requested." in output
 
 
 def test_run_once_processes_drive_without_telegram_notification(monkeypatch):
@@ -247,20 +380,15 @@ def test_run_once_processes_drive_without_telegram_notification(monkeypatch):
     assert sent == []
 
 
-def test_run_telegram_bot_with_retries_retries_after_startup_failure(monkeypatch, capsys):
+def test_run_telegram_bot_with_retries_degrades_after_three_failures(monkeypatch, capsys):
     config = Config(accounting_folder_id="accounting-id", inbox_folder_id="inbox-id")
     state = SessionState()
     attempts = []
     sleeps = []
 
-    class StopRetry(BaseException):
-        pass
-
     async def fake_run_telegram_bot(config, state, classifier, correction_parser, drive_client):
         attempts.append((config, state, classifier, correction_parser, drive_client))
-        if len(attempts) == 1:
-            raise RuntimeError("telegram network down")
-        raise StopRetry()
+        raise RuntimeError("HTTP 409: https://api.telegram.org/botTOKEN/getUpdates")
 
     async def fake_sleep(seconds):
         sleeps.append(seconds)
@@ -268,20 +396,29 @@ def test_run_telegram_bot_with_retries_retries_after_startup_failure(monkeypatch
     monkeypatch.setattr(app, "run_telegram_bot", fake_run_telegram_bot)
     monkeypatch.setattr(app.asyncio, "sleep", fake_sleep)
 
-    with pytest.raises(StopRetry):
-        asyncio.run(
-            app.run_telegram_bot_with_retries(
-                config,
-                state,
-                classifier=cast(DocumentClassifier, "classifier"),
-                correction_parser=cast(CorrectionParser, "parser"),
-                drive_client=cast(DriveClient, "drive-client"),
-                retry_delay_seconds=7,
-            )
+    asyncio.run(
+        app.run_telegram_bot_with_retries(
+            config,
+            state,
+            classifier=cast(DocumentClassifier, "classifier"),
+            correction_parser=cast(CorrectionParser, "parser"),
+            drive_client=cast(DriveClient, "drive-client"),
+            retry_delays_seconds=(5, 30),
+            max_attempts=3,
         )
+    )
 
-    assert len(attempts) == 2
-    assert sleeps == [7]
+    assert len(attempts) == 3
+    assert sleeps == [5, 30]
+    assert state.telegram_available is False
     output = capsys.readouterr().out
-    assert "Telegram bot error: telegram network down" in output
-    assert "Retrying Telegram bot in 7s" in output
+    assert "Telegram bot unavailable on attempt 1/3." in output
+    assert "Retrying Telegram bot in 5s." in output
+    assert "Telegram bot unavailable on attempt 2/3." in output
+    assert "Retrying Telegram bot in 30s." in output
+    assert "Telegram bot unavailable on attempt 3/3." in output
+    assert (
+        "Telegram unavailable after 3 attempts; continuing in Drive-only degraded mode." in output
+    )
+    assert "HTTP 409" not in output
+    assert "api.telegram.org" not in output

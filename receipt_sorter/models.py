@@ -83,4 +83,5 @@ ProcessingOutcome = ProcessedDocument | NeedsReviewDocument
 @dataclass
 class SessionState:
     processed_count: int = 0
+    telegram_available: bool = True
     in_progress_file_ids: set[str] = field(default_factory=set)

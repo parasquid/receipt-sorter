@@ -10,6 +10,7 @@ from receipt_sorter.models import Correction, DocumentResult
 from receipt_sorter.openai_provider import (
     OpenAICorrectionParser,
     OpenAIDocumentClassifier,
+    build_prompt_cache_key,
     log_openai_usage,
 )
 from receipt_sorter.validation import InvalidClassificationError
@@ -277,9 +278,8 @@ def test_openai_classifier_configures_prompt_cache_settings(monkeypatch):
 
     settings = seen["agent_kwargs"]["model_settings"].kwargs
     assert settings["prompt_cache_retention"] == "24h"
-    assert settings["extra_args"]["prompt_cache_key"].startswith(
-        "receipt-sorter:classifier:gpt-5.5:"
-    )
+    assert settings["extra_args"]["prompt_cache_key"].startswith("receipt-sorter:classifier:")
+    assert len(settings["extra_args"]["prompt_cache_key"]) <= 64
 
 
 def test_openai_correction_parser_configures_prompt_cache_settings(monkeypatch):
@@ -325,9 +325,21 @@ def test_openai_correction_parser_configures_prompt_cache_settings(monkeypatch):
     settings = seen["agent_kwargs"]["model_settings"].kwargs
     assert correction.vendor == "Vendor"
     assert settings["prompt_cache_retention"] == "24h"
-    assert settings["extra_args"]["prompt_cache_key"].startswith(
-        "receipt-sorter:correction:gpt-5.5:"
+    assert settings["extra_args"]["prompt_cache_key"].startswith("receipt-sorter:correction:")
+    assert len(settings["extra_args"]["prompt_cache_key"]) <= 64
+
+
+def test_prompt_cache_key_stays_within_openai_limit_and_changes_by_model():
+    short_model_key = build_prompt_cache_key("classifier", "gpt-5.5", "static prompt")
+    long_model_key = build_prompt_cache_key(
+        "classifier",
+        "provider/model-name-that-is-longer-than-the-openai-cache-key-limit",
+        "static prompt",
     )
+
+    assert len(short_model_key) <= 64
+    assert len(long_model_key) <= 64
+    assert short_model_key != long_model_key
 
 
 def test_log_openai_usage_includes_cached_tokens(capsys):

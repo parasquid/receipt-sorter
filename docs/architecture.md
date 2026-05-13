@@ -7,6 +7,8 @@
 - `receipt_sorter.app.main`: CLI parser and runtime dispatcher.
 
 Default runtime is one-shot mode. `--serve` starts the long-lived Drive poller and Telegram listener.
+If the Telegram listener fails three times in server mode, the listener task exits
+cleanly, marks the session as Drive-only degraded, and leaves the Drive poller running.
 
 ## Package Map
 

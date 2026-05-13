@@ -56,9 +56,10 @@ def build_prompt_cache_key(
     model: str,
     static_prompt_content: str,
 ) -> str:
-    digest = sha256(static_prompt_content.encode("utf-8")).hexdigest()[:32]
     normalized_model = model.strip().lower() or "unknown"
-    return f"{PROMPT_CACHE_KEY_PREFIX}:{flow}:{normalized_model}:{digest}"
+    cache_identity = f"{normalized_model}\0{static_prompt_content}"
+    digest = sha256(cache_identity.encode("utf-8")).hexdigest()[:32]
+    return f"{PROMPT_CACHE_KEY_PREFIX}:{flow}:{digest}"
 
 
 def build_openai_model_settings_kwargs(

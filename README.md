@@ -226,6 +226,10 @@ or:
 uv run receipt-sorter --serve
 ```
 
+If Telegram cannot start in server mode, the bot retries three times with short
+backoff delays. After the third failure, it keeps Drive polling alive in Drive-only
+degraded mode and suppresses Telegram notifications until the process is restarted.
+
 Drop a PDF into `Accounting/Inbox/`. The bot will:
 
 1. Detect the PDF.

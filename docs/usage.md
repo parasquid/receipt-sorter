@@ -54,6 +54,10 @@ Server mode:
 - Accepts Telegram PDF uploads.
 - Accepts correction messages.
 
+If Telegram startup fails, server mode retries three times with 5s and 30s
+backoff delays. After the third failure, Drive polling continues in Drive-only
+degraded mode and Telegram notifications are skipped until restart.
+
 ## Drive Workflow
 
 Drop a PDF into `Accounting/Inbox/`. The bot will:

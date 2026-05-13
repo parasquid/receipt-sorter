@@ -71,3 +71,8 @@ Invalid classifications move PDFs to `Needs Review/` because retrying the same i
 One-shot mode exits after one inbox pass. Unhandled top-level errors should cause a non-zero process exit so the scheduler can report failure.
 
 Server mode catches Drive polling errors, waits 60 seconds, and continues polling.
+
+Server mode retries Telegram startup/runtime failures three times. The first two
+failures wait 5s and 30s before retrying. After the third failure, the process
+continues in Drive-only degraded mode: Drive polling stays active, Telegram
+listening stops, and Drive-origin Telegram notifications are skipped until restart.

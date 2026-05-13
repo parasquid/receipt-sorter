@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from telegram.request import BaseRequest
 
 from receipt_sorter.ai import CorrectionParser, DocumentClassifier
 from receipt_sorter.config import Config
@@ -51,11 +54,14 @@ async def send_telegram_summary(
 
     summary = format_batch_summary(processed_documents)
     log_step(f"Sending Telegram batch summary to {config.telegram_chat_id}.")
-    bot = Bot(config.telegram_bot_token)
-    await bot.send_message(
-        chat_id=config.telegram_chat_id,
-        text=summary,
-    )
+    async with Bot(
+        config.telegram_bot_token,
+        request=build_ipv4_telegram_request(),
+    ) as bot:
+        await bot.send_message(
+            chat_id=config.telegram_chat_id,
+            text=summary,
+        )
     log_step("Telegram batch summary sent.")
 
 
@@ -167,6 +173,23 @@ async def telegram_unhandled_message_handler(update: Any, context: Any) -> None:
     )
 
 
+def telegram_polling_error_callback(error: object) -> None:
+    log_step("Telegram polling error; retrying.")
+
+
+def build_ipv4_telegram_request() -> BaseRequest:
+    import httpx
+    from telegram.request import HTTPXRequest
+
+    return HTTPXRequest(
+        connect_timeout=10.0,
+        read_timeout=30.0,
+        httpx_kwargs={
+            "transport": httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=3),
+        },
+    )
+
+
 async def run_telegram_bot(
     config: Config,
     state: SessionState,
@@ -183,7 +206,13 @@ async def run_telegram_bot(
 
     if drive_client is None:
         drive_client = AsyncDriveClient(drive_service())
-    application = ApplicationBuilder().token(config.telegram_bot_token).build()
+    application = (
+        ApplicationBuilder()
+        .token(config.telegram_bot_token)
+        .request(build_ipv4_telegram_request())
+        .get_updates_request(build_ipv4_telegram_request())
+        .build()
+    )
     application.bot_data["config"] = config
     application.bot_data["drive_client"] = drive_client
     application.bot_data["state"] = state
@@ -205,10 +234,18 @@ async def run_telegram_bot(
     updater = application.updater
     if updater is None:
         raise RuntimeError("Telegram updater was not initialized")
-    await updater.start_polling()
+    await updater.start_polling(error_callback=telegram_polling_error_callback)
+    log_step("Telegram bot polling started.")
+    cancelled = False
     try:
         await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
-        await updater.stop()
-        await application.stop()
-        await application.shutdown()
+        if cancelled:
+            log_step("Telegram bot polling stopped.")
+        else:
+            await updater.stop()
+            await application.stop()
+            await application.shutdown()

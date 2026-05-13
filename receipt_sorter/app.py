@@ -35,6 +35,8 @@ async def poll_drive(
         log_step("Drive notifications disabled because Telegram config is incomplete.")
     while True:
         try:
+            if not state.telegram_available:
+                log_step("Drive-only degraded mode is active; Telegram is disabled until restart.")
             await poll_drive_once(config, drive_client, classifier, state)
         except Exception as exc:
             log_step(f"Drive polling error: {exc}")
@@ -51,8 +53,18 @@ async def poll_drive_once(
     state: SessionState,
 ) -> list[ProcessingOutcome]:
     processed_batch = await process_drive_batch(config, drive_client, classifier, state)
-    if processed_batch and config.telegram_bot_token and config.telegram_chat_id:
-        await send_telegram_summary(config, processed_batch)
+    if (
+        processed_batch
+        and state.telegram_available
+        and config.telegram_bot_token
+        and config.telegram_chat_id
+    ):
+        try:
+            await send_telegram_summary(config, processed_batch)
+        except Exception:
+            log_step("Telegram summary failed; Drive processing already completed.")
+    elif processed_batch and not state.telegram_available:
+        log_step("Skipping Telegram summary because server is in Drive-only degraded mode.")
     return processed_batch
 
 
@@ -118,15 +130,27 @@ async def run_telegram_bot_with_retries(
     classifier: DocumentClassifier,
     correction_parser: CorrectionParser,
     drive_client: DriveClient,
-    retry_delay_seconds: int = 60,
+    retry_delays_seconds: tuple[int, ...] = (5, 30),
+    max_attempts: int = 3,
 ) -> None:
-    while True:
+    for attempt in range(1, max_attempts + 1):
         try:
             await run_telegram_bot(config, state, classifier, correction_parser, drive_client)
+            return
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            log_step(f"Telegram bot error: {exc}")
+        except Exception:
+            log_step(f"Telegram bot unavailable on attempt {attempt}/{max_attempts}.")
+            if attempt >= max_attempts:
+                state.telegram_available = False
+                log_step(
+                    "Telegram unavailable after "
+                    f"{max_attempts} attempts; continuing in Drive-only degraded mode."
+                )
+                return
+            retry_delay_seconds = retry_delays_seconds[
+                min(attempt - 1, len(retry_delays_seconds) - 1)
+            ]
             log_step(f"Retrying Telegram bot in {retry_delay_seconds}s.")
             await asyncio.sleep(retry_delay_seconds)
 
@@ -152,7 +176,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     config = parse_config()
-    if args.serve:
-        asyncio.run(run_server(config))
-        return
-    asyncio.run(run_once(config))
+    try:
+        if args.serve:
+            asyncio.run(run_server(config))
+            return
+        asyncio.run(run_once(config))
+    except KeyboardInterrupt:
+        log_step("Shutdown requested.")
