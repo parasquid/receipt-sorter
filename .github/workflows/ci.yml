@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format . --check
+
+      - name: Type check
+        run: uv run basedpyright
+
+      - name: Test
+        run: uv run pytest -q
+
+      - name: Compile check
+        run: uv run python -m py_compile bot.py setup_drive.py receipt_sorter/*.py

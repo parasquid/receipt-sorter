@@ -1,0 +1,70 @@
+[project]
+name = "receipt-sorter"
+version = "0.1.0"
+description = "Drive inbox accounting document sorter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+keywords = ["accounting", "google-drive", "telegram", "openai", "document-classification"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = [
+    "google-api-python-client>=2.170.0",
+    "google-auth>=2.40.0",
+    "openai>=2.0.0",
+    "openai-agents>=0.3.0",
+    "pydantic>=2.11.0",
+    "python-telegram-bot>=22.0",
+    "python-dotenv>=1.1.0",
+]
+
+[project.scripts]
+receipt-sorter = "receipt_sorter.app:main"
+
+[project.urls]
+Homepage = "https://github.com/parasquid/receipt-sorter"
+Repository = "https://github.com/parasquid/receipt-sorter"
+Issues = "https://github.com/parasquid/receipt-sorter/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["receipt_sorter"]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.0",
+    "pytest>=8.3.0",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+include = ["receipt_sorter", "bot.py", "setup_drive.py", "tests"]
+exclude = [".venv", ".pytest_cache"]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportAny = false

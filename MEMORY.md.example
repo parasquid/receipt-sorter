@@ -1,0 +1,38 @@
+# Rules and Corrections
+
+This file guides the classifier. The agent reads it on every classification call.
+
+The bot copies this file to `MEMORY.md` automatically on first run if `MEMORY.md` does not exist.
+You can also copy it manually before first run:
+
+```bash
+cp MEMORY.md.example MEMORY.md
+```
+
+Do not commit your local `MEMORY.md`. It may contain private vendor names, business relationships, or correction history.
+
+## Rules
+
+Add organization-specific filing rules here.
+
+Examples:
+
+- Known vendor names -> preferred expense category.
+- Ambiguous vendors -> category to prefer by default.
+- Local tax or payroll documents -> statutory or payroll categories.
+- Marketplace receipts -> classify based on purchased item, not marketplace name.
+
+## Corrections
+
+(Empty initially. Populated when the user corrects a misclassification via Telegram.)
+
+## Currency
+
+- Use the document currency when visible.
+- Use `DEFAULT_CURRENCY` only when the document does not show a currency.
+- Keep foreign-currency receipts in their original currency unless your accounting workflow requires conversion.
+
+## Notes
+
+- Confidence < 0.6 -> category "Other".
+- Filenames drop legal suffixes and use the common vendor name.
